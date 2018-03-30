@@ -109,10 +109,10 @@ public class DefaultHttpClient implements HttpClient {
     private long maxRetryTimeMillis = 15000;
 
     /** Indicates that a error in the whitelist should use the maxRetryTimeMillis */
-    protected static final int USE_DEFAULT_DURATION = -1;
+    public static final int USE_GLOBAL_TIMEOUT = -1;
 
     /** Retry duration, expressed as either max attempts or max time */
-    protected class RetryDuration {
+    public static class RetryDuration {
         public int maxRetryTimeMillis;
         public int maxRetryAttempts;
 
@@ -133,27 +133,36 @@ public class DefaultHttpClient implements HttpClient {
     }
 
     /**
+     * Constructor which takes an append list to the default whitelist
+     *
+     * @param appendList append list of whitelist entries
+     */
+    public DefaultHttpClient(HashMap<Integer, RetryDuration> appendList) {
+        this();
+        for (HashMap.Entry<Integer, RetryDuration> entry : appendList.entrySet()) {
+            whitelist.put(entry.getKey(), entry.getValue());
+        }
+    }
+
+    /**
      * Constructor.
-     * <p>
-     * Parameters: - httpClient : the Apache CloseableHttpClient to use
-     * <p>
-     * Exceptions: - IllegalArgumentException : if any argument is null
      *
      * @param httpClient the http client
+     * Exceptions: - IllegalArgumentException : if any argument is null
      */
     public DefaultHttpClient(CloseableHttpClient httpClient, JsonSerializer jsonSerializer) {
         this.httpClient = Util.throwIfNull(httpClient);
         this.jsonSerializer = jsonSerializer;
 
         /**Smartsheet.com is currently offline for system maintenance. Please check back again shortly. */
-        this.whitelist.put(4001, new RetryDuration(USE_DEFAULT_DURATION, 0));
+        this.whitelist.put(4001, new RetryDuration(USE_GLOBAL_TIMEOUT, 0));
         /** Server timeout exceeded. Request has failed */
-        this.whitelist.put(4002, new RetryDuration(USE_DEFAULT_DURATION, 0));
+        this.whitelist.put(4002, new RetryDuration(USE_GLOBAL_TIMEOUT, 0));
         /** Rate limit exceeded. */
-        this.whitelist.put(4003, new RetryDuration(USE_DEFAULT_DURATION, 0));
+        this.whitelist.put(4003, new RetryDuration(USE_GLOBAL_TIMEOUT, 0));
         /** An unexpected error has occurred. Please retry your request.
           * If you encounter this error repeatedly, please contact api@smartsheet.com for assistance. */
-        this.whitelist.put(4004, new RetryDuration(USE_DEFAULT_DURATION, 0));
+        this.whitelist.put(4004, new RetryDuration(USE_GLOBAL_TIMEOUT, 0));
     }
 
     /**
@@ -458,7 +467,7 @@ public class DefaultHttpClient implements HttpClient {
 
         long backoffMillis = 0;
         if (retryDuration.maxRetryTimeMillis != 0) {
-            if (retryDuration.maxRetryTimeMillis == USE_DEFAULT_DURATION) {
+            if (retryDuration.maxRetryTimeMillis == USE_GLOBAL_TIMEOUT) {
                 backoffMillis = calcBackoff(previousAttempts, totalElapsedTimeMillis, maxRetryTimeMillis, error);
             }
             else
