@@ -63,6 +63,7 @@ import java.util.*;
  * thread safe.
  */
 public class DefaultHttpClient implements HttpClient {
+
     /** logger for general errors, warnings, etc */
     private static final Logger logger = LoggerFactory.getLogger(DefaultHttpClient.class);
 
@@ -101,9 +102,28 @@ public class DefaultHttpClient implements HttpClient {
 
     private static final String JSON_MIME_TYPE = ContentType.APPLICATION_JSON.getMimeType();
 
+    /** JSON serializer used by retry */
     private JsonSerializer jsonSerializer;
 
+    /** Default maximum retry time in milliseconds */
     private long maxRetryTimeMillis = 15000;
+
+    /** Indicates that a error in the whitelist should use the maxRetryTimeMillis */
+    protected static final int USE_DEFAULT_DURATION = -1;
+
+    /** Retry duration, expressed as either max attempts or max time */
+    protected class RetryDuration {
+        public int maxRetryTimeMillis;
+        public int maxRetryAttempts;
+
+        public RetryDuration(int maxRetryTimeMillis, int maxRetryAttempts) {
+            this.maxRetryTimeMillis = maxRetryTimeMillis;
+            this.maxRetryAttempts = maxRetryAttempts;
+        }
+    }
+
+    /** The retry whitelist */
+    protected final HashMap<Integer, RetryDuration> whitelist = new HashMap<Integer, RetryDuration>();
 
     /**
      * Constructor.
@@ -124,6 +144,16 @@ public class DefaultHttpClient implements HttpClient {
     public DefaultHttpClient(CloseableHttpClient httpClient, JsonSerializer jsonSerializer) {
         this.httpClient = Util.throwIfNull(httpClient);
         this.jsonSerializer = jsonSerializer;
+
+        /**Smartsheet.com is currently offline for system maintenance. Please check back again shortly. */
+        this.whitelist.put(4001, new RetryDuration(USE_DEFAULT_DURATION, 0));
+        /** Server timeout exceeded. Request has failed */
+        this.whitelist.put(4002, new RetryDuration(USE_DEFAULT_DURATION, 0));
+        /** Rate limit exceeded. */
+        this.whitelist.put(4003, new RetryDuration(USE_DEFAULT_DURATION, 0));
+        /** An unexpected error has occurred. Please retry your request.
+          * If you encounter this error repeatedly, please contact api@smartsheet.com for assistance. */
+        this.whitelist.put(4004, new RetryDuration(USE_DEFAULT_DURATION, 0));
     }
 
     /**
@@ -380,10 +410,11 @@ public class DefaultHttpClient implements HttpClient {
      *
      * @param previousAttempts
      * @param totalElapsedTimeMillis
+     * @param maxRetryTimeMillis
      * @param error
      * @return -1 to fall out of retry loop, positive number indicates backoff time
      */
-    public long calcBackoff(int previousAttempts, long totalElapsedTimeMillis, Error error) {
+    public long calcBackoff(int previousAttempts, long totalElapsedTimeMillis, long maxRetryTimeMillis, Error error) {
 
         long backoffMillis = (long)(Math.pow(2, previousAttempts) * 1000) + new Random().nextInt(1000);
 
@@ -417,24 +448,30 @@ public class DefaultHttpClient implements HttpClient {
         catch (IOException e) {
             return false;
         }
-        switch(error.getErrorCode()) {
-            case 4001: /** Smartsheet.com is currently offline for system maintenance. Please check back again shortly. */
-            case 4002: /** Server timeout exceeded. Request has failed */
-            case 4003: /** Rate limit exceeded. */
-            case 4004: /** An unexpected error has occurred. Please retry your request.
-             * If you encounter this error repeatedly, please contact api@smartsheet.com for assistance. */
-                break;
-            default:
+        RetryDuration retryDuration = whitelist.get(error.getErrorCode());
+        if (retryDuration == null) {
+            return false;
+        }
+
+        if (retryDuration.maxRetryAttempts != 0 && previousAttempts > retryDuration.maxRetryAttempts)
+            return false;
+
+        long backoffMillis = 0;
+        if (retryDuration.maxRetryTimeMillis != 0) {
+            if (retryDuration.maxRetryTimeMillis == USE_DEFAULT_DURATION) {
+                backoffMillis = calcBackoff(previousAttempts, totalElapsedTimeMillis, maxRetryTimeMillis, error);
+            }
+            else
+                backoffMillis = calcBackoff(previousAttempts, totalElapsedTimeMillis,
+                        retryDuration.maxRetryTimeMillis, error);
+            if (backoffMillis < 0)
                 return false;
         }
 
-        long backoffMillis = calcBackoff(previousAttempts, totalElapsedTimeMillis, error);
-        if(backoffMillis < 0)
-            return false;
-
         logger.info("HttpError StatusCode=" + response.getStatusCode() + ": Retrying in " + backoffMillis + " milliseconds");
         try {
-            Thread.sleep(backoffMillis);
+            if(backoffMillis != 0)
+                Thread.sleep(backoffMillis);
         }
         catch (InterruptedException e) {
             logger.warn("sleep interrupted", e);

@@ -64,10 +64,11 @@ public interface HttpClient extends Closeable {
      *
      * @param previousAttempts
      * @param totalElapsedTimeMillis
+     * @param maxRetryTimeMillis
      * @param error
      * @return -1 to fall out of retry loop, positive number indicates backoff time
      */
-    public long calcBackoff(int previousAttempts, long totalElapsedTimeMillis, Error error);
+    public long calcBackoff(int previousAttempts, long totalElapsedTimeMillis, long maxRetryTimeMillis, Error error);
 
     /**
      * Called when an API request fails to determine if it can retry the request.
